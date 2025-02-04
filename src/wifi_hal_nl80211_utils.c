@@ -51,7 +51,7 @@ static unsigned int interface_index_map_size;
 static const wifi_interface_name_idex_map_t static_interface_index_map[] = {
 #ifdef RASPBERRY_PI_PORT
 #if defined(PLATFORM_LINUX)
-    {0, 0,  "wlan0",     "brlan0",    0,    0,     "private_ssid_2g"},
+    {0, 0,  "wlan0",     "brlan0",    0,    15,     "mesh_sta_5g"},
 #else
     {0, 0,  "wlan0",     "brlan0",    0,    0,     "private_ssid_2g"},
     {1, 1,  "wlan1",     "brlan0",    0,    1,      "private_ssid_5g"},

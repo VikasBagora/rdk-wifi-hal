@@ -338,6 +338,13 @@ int update_hostap_data(wifi_interface_info_t *interface)
 
     vap = &interface->vap_info;
 
+    wifi_hal_error_print("%s():%d: interface->vap_info.vap_mode: %d, wifi_vap_mode_ap:%d\n", __func__, __LINE__, interface->vap_info.vap_mode, wifi_vap_mode_ap);
+
+    if (vap->vap_mode != wifi_vap_mode_ap || is_wifi_hal_vap_mesh_sta(vap->vap_index)) {
+        wifi_hal_error_print("%s:%d: Not an AP based VAP. Returning error\n", __func__, __LINE__);
+	return RETURN_ERR;
+    }
+
     radio = get_radio_by_rdk_index(vap->radio_index);
     iconf = &radio->iconf;
 

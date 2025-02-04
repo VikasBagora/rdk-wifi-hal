@@ -219,8 +219,8 @@ int platform_pre_create_vap(wifi_radio_index_t index, wifi_vap_info_map_t *map)
 
 int platform_flags_init(int *flags)
 {
-    wifi_hal_dbg_print("%s:%d \n",__func__,__LINE__);
-    *flags = PLATFORM_FLAGS_STA_INACTIVITY_TIMER;
+    *flags = PLATFORM_FLAGS_STA_INACTIVITY_TIMER | PLATFORM_FLAGS_UPDATE_WIPHY_ON_PRIMARY;
+    wifi_hal_dbg_print("%s:%d: platform_flags:0x%x\n",__func__, __LINE__, *flags);
     return 0;
 }
 

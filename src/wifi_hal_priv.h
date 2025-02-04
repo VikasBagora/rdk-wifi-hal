@@ -1024,6 +1024,7 @@ int wifi_drv_sta_deauth(void *priv, const u8 *own_addr, const u8 *addr, u16 reas
                                           size_t csa_offs_len);
 #endif
 
+int set_sta_wifi_security_cfg(uint32_t vap_index, wifi_vap_security_t *p_recv_security);
 BOOL is_wifi_hal_vap_private(UINT ap_index);
 BOOL is_wifi_hal_vap_xhs(UINT ap_index);
 BOOL is_wifi_hal_vap_hotspot(UINT ap_index);

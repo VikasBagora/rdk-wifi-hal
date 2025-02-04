@@ -75,6 +75,9 @@
 
 #define MAX_MBSSID_INTERFACES 8
 
+#define WIFI_6G_CHANNEL_START_RANGE		5955
+#define WIFI_5G_CHANNEL_START_RANGE		5180
+
 #ifdef WIFI_EMULATOR_CHANGE
 static unsigned char eapol_qos_info[] = {0x88,0x02,0x3c,0x00,0x04,0xf0,0x21,0x5f,0x03,0x7c,0xe2,0xdb,0xd1,0xe4,0xdf,0x53,0xe2,0xdb,0xd1,0xe4,0xdf,0x53,0x10,0x00,0x05,0x00};
 
@@ -6368,17 +6371,19 @@ int nl80211_init_primary_interfaces()
             wifi_hal_error_print("%s:%d: Skip the Radio %d .This is sleeping in ECO mode \n", __func__, __LINE__, radio->index);
             continue;
         }
-        primary_interface = get_primary_interface(radio);
-        if (primary_interface == NULL) {
-            wifi_hal_error_print("%s:%d: Error updating dev:%d no primary interfaces exist\n", __func__, __LINE__, radio->index);
-            return -1;
+
+        if (g_wifi_hal.platform_flags & PLATFORM_FLAGS_UPDATE_WIPHY_ON_PRIMARY) {
+            interface = get_primary_interface(radio);
+        } else {
+            interface = get_private_vap_interface(radio);
         }
 
-        interface = get_private_vap_interface(radio);
         if (interface == NULL) {
             wifi_hal_info_print("%s:%d: INFO: updating dev:%d no private vap interfaces exist\n", __func__, __LINE__, radio->index);
             return 0;
         }
+
+        primary_interface = interface;	
 
         msg = nl80211_drv_cmd_msg(g_wifi_hal.nl80211_id, interface, 0, NL80211_CMD_SET_INTERFACE);
         if (msg == NULL) {
@@ -7151,11 +7156,20 @@ int nl80211_create_interfaces(wifi_radio_info_t *radio, wifi_vap_info_map_t *map
     return 0;
 }
 
+int scan_list_sort_based_on_rssi(const void *a, const void *b)
+{
+    wifi_bss_info_t *scan_1 = (wifi_bss_info_t *)a;
+    wifi_bss_info_t *scan_2 = (wifi_bss_info_t *)b;
+
+    return scan_2->rssi - scan_1->rssi;
+}
+
 static int scan_results_handler(struct nl_msg *msg, void *arg)
 {
     uint count = 0;
     uint desired_scanned_ssid_pos = 0;
     uint ssid_found_count = 0;
+    signed int vap_ssid_len = 0;
 
     wifi_bss_info_t *bss, *scan_info;
     wifi_device_callbacks_t *callbacks;
@@ -7165,7 +7179,6 @@ static int scan_results_handler(struct nl_msg *msg, void *arg)
     wifi_hal_dbg_print("%s:%d: [SCAN] ENTER\n", __func__, __LINE__);
 
     *finish_data->err = 0;
-
 
     callbacks = get_hal_device_callbacks();
     if (callbacks == NULL) {
@@ -7194,18 +7207,24 @@ static int scan_results_handler(struct nl_msg *msg, void *arg)
     if (interface->vap_info.vap_mode == wifi_vap_mode_sta) {
         // STA mode: filter result
         scan_info = hash_map_get_first(interface->scan_info_map);
+	vap_ssid_len = strlen(interface->vap_info.u.sta_info.ssid);
         while (scan_info != NULL) {
-            if (strcmp(scan_info->ssid, interface->vap_info.u.sta_info.ssid) == 0){
+            wifi_hal_dbg_print("%s:%d: [SCAN] scan_ssid:%s, freq->%d, rrsi:%d\n", __func__, __LINE__, scan_info->ssid, scan_info->freq, scan_info->rssi);
+
+            /* Do once in case of ssid is provided from applications */
+            if ((!vap_ssid_len) || (strcmp(scan_info->ssid, interface->vap_info.u.sta_info.ssid) == 0)) {
                 bss[desired_scanned_ssid_pos] = *scan_info;
                 ssid_found_count++;
                 desired_scanned_ssid_pos++;
             }
+ 
             scan_info = hash_map_get_next(interface->scan_info_map, scan_info);
         }
         pthread_mutex_unlock(&interface->scan_info_mutex);
-        wifi_hal_dbg_print("%s:%d: [SCAN] scan found %u results with ssid:%s\n", __func__, __LINE__, ssid_found_count, interface->vap_info.u.sta_info.ssid);
-    }
-    else {
+	wifi_hal_dbg_print("%s:%d: [SCAN] scan_found_count:%u, count:%d, results with ssid:%s\n", 
+            __func__, __LINE__, ssid_found_count, count, interface->vap_info.u.sta_info.ssid);
+
+    } else {
         // AP mode: copy all
         unsigned total_ap_count;
         scan_info = hash_map_get_first(interface->scan_info_map);
@@ -7235,6 +7254,8 @@ static int scan_results_handler(struct nl_msg *msg, void *arg)
             else
                 bss = new_bss;
         }
+
+        qsort(bss, ssid_found_count, sizeof(wifi_bss_info_t), scan_list_sort_based_on_rssi);
 
         // It is assumed that "bss" has to be released by callback function:
         callbacks->scan_result_callback(interface->vap_info.radio_index, &bss, &ssid_found_count);
@@ -8165,10 +8186,14 @@ int nl80211_connect_sta(wifi_interface_info_t *interface)
 
             wpa_conf.wpa_key_mgmt = key_mgmt;
         }
-
-        wifi_hal_dbg_print("update_wpa_sm_params%x %x %x\n", data.group_cipher, data.pairwise_cipher,
-                key_mgmt);
+        wifi_hal_dbg_print("%s:%d: update_wpa_sm_params%x %x %x\n", __func__, __LINE__, data.group_cipher, data.pairwise_cipher, key_mgmt);
     } else {
+#if defined(_PLATFORM_RASPBERRYPI_)
+        security->mode = backhaul->sec_mode;
+#endif
+	wifi_hal_dbg_print("%s:%d: security->mode:%d, security->key.key:%s, backhaul->enc_method:%d\n", __func__, __LINE__,
+            security->mode, security->u.key.key, backhaul->enc_method);
+
         if (security->mode == wifi_security_mode_none) {
             wpa_conf.wpa_key_mgmt = WPA_KEY_MGMT_NONE;
             wpa_conf.wpa_group = WPA_CIPHER_NONE;
@@ -9013,7 +9038,9 @@ static void parse_extension_tag(const uint8_t type, uint8_t len, const uint8_t *
         return;
     }
 
+#if !defined(_PLATFORM_RASPBERRYPI_)
     wifi_hal_dbg_print("%s:%d: [SCAN] Extension TagNumber=%d\n", __func__, __LINE__, data[0]);
+#endif
 
     switch (data[0]) {
         case WLAN_EID_EXT_HE_CAPABILITIES:
@@ -9194,6 +9221,7 @@ static int scan_info_handler(struct nl_msg *msg, void *arg)
     const char *key = NULL;
     wifi_bss_info_t* scan_info_ap = NULL;
     ssid_t          ssid = {0};
+    int scanned_freq = 0, scanned_band = 0;
 
     interface = (wifi_interface_info_t *)arg;
     vap = &interface->vap_info;
@@ -9217,6 +9245,24 @@ static int scan_info_handler(struct nl_msg *msg, void *arg)
     } else {
         // wifi_hal_dbg_print("%s:%d: [SCAN] BSSID not found\n", __func__, __LINE__);
         return NL_SKIP;
+    }
+
+    if (bss[NL80211_BSS_FREQUENCY] && (vap->vap_mode == wifi_vap_mode_sta)) {
+	scanned_freq = nla_get_u32(bss[NL80211_BSS_FREQUENCY]);
+
+        /* Determine scanned freq for neighbhoring APs */
+        if (scanned_freq >= WIFI_6G_CHANNEL_START_RANGE) {
+	    scanned_band = WIFI_FREQUENCY_6_BAND;
+        } else if(scanned_freq >= WIFI_5G_CHANNEL_START_RANGE) {
+	    scanned_band = WIFI_FREQUENCY_5_BAND;
+        } else {
+	    scanned_band = WIFI_FREQUENCY_2_4_BAND;
+        }
+
+        /* Apply filter (to scan only for vap mode band) only for sta mode */
+	if ((vap->vap_mode == wifi_vap_mode_sta) & (scanned_band != vap->u.sta_info.scan_params.channel.band)) {
+            return NL_SKIP;
+	}
     }
 
     if (bss[NL80211_BSS_INFORMATION_ELEMENTS]) {
@@ -9260,10 +9306,10 @@ static int scan_info_handler(struct nl_msg *msg, void *arg)
         uint freq = nla_get_u32(bss[NL80211_BSS_FREQUENCY]);
         scan_info_ap->freq = freq;
 
-        if ( freq >= 5955 ) {
+        if ( freq >= WIFI_6G_CHANNEL_START_RANGE ) {
             scan_info_ap->oper_freq_band = WIFI_FREQUENCY_6_BAND;
         }
-        else if( freq >= 5180 ) {
+        else if( freq >= WIFI_5G_CHANNEL_START_RANGE ) {
             scan_info_ap->oper_freq_band = WIFI_FREQUENCY_5_BAND;
         }
         else {
@@ -9330,7 +9376,7 @@ static int scan_info_handler(struct nl_msg *msg, void *arg)
     }
 
     if (vap->vap_mode == wifi_vap_mode_sta) {
-        if (strcmp(scan_info_ap->ssid, vap->u.sta_info.ssid) == 0) {
+	if ((strlen(interface->vap_info.u.sta_info.ssid) == 0) || (strcmp(scan_info_ap->ssid, interface->vap_info.u.sta_info.ssid) == 0)) {
             wifi_hal_dbg_print("%s:%d: [SCAN] found backhaul bssid:%s rssi:%d on freq:%d for ssid:%s\n", __func__, __LINE__,
                         to_mac_str(bssid, bssid_str), scan_info_ap->rssi, scan_info_ap->freq, scan_info_ap->ssid);
             memcpy(vap->u.sta_info.bssid, bssid, sizeof(bssid_t));

@@ -347,6 +347,11 @@ INT wifi_hal_init()
         wifi_hal_error_print("%s:%d: Failed to create the ECO mode interfaces\n", __func__, __LINE__);
     }
 
+    if ((flags_init_fn = get_platform_flags_init_fn()) != NULL) {
+        wifi_hal_dbg_print("%s:%d: set platform specific flags\n", __func__, __LINE__);
+        flags_init_fn((int *)&g_wifi_hal.platform_flags);
+    }
+
     if (nl80211_init_primary_interfaces() != 0) {
         return RETURN_ERR;
     }
@@ -395,10 +400,11 @@ INT wifi_hal_init()
         interface = hash_map_get_first(radio->interface_map);
 
         while (interface != NULL) {
-            update_hostap_data(interface);
-            update_hostap_iface(interface);
-            update_hostap_iface_flags(interface);
-            init_hostap_hw_features(interface);
+            if (update_hostap_data(interface) == RETURN_OK) {
+                update_hostap_iface(interface);
+		update_hostap_iface_flags(interface);
+		init_hostap_hw_features(interface);
+            }
             interface = hash_map_get_next(radio->interface_map, interface);
         }
     }
@@ -411,10 +417,6 @@ INT wifi_hal_init()
         }
     }
 
-    if ((flags_init_fn = get_platform_flags_init_fn()) != NULL) {
-        wifi_hal_dbg_print("%s:%d: set platform specific flags\n", __func__, __LINE__);
-        flags_init_fn((int *)&g_wifi_hal.platform_flags);
-    }
 #endif
 
     wifi_hal_info_print("%s:%d: HOSTAP_VERSION: %d\n", __func__, __LINE__, HOSTAPD_VERSION);
@@ -1256,7 +1258,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
         }
         memcpy((unsigned char *)&interface->vap_info, (unsigned char *)vap, sizeof(wifi_vap_info_t));
 
-        wifi_hal_info_print("%s:%d: interface:%s set down\n", __func__, __LINE__, interface->name);
+	wifi_hal_info_print("%s:%d: interface:%s set down vap->vap_mode:%d\n", __func__, __LINE__, interface->name, vap->vap_mode);
         nl80211_interface_enable(interface->name, false);
 #ifndef CONFIG_WIFI_EMULATOR
         if (vap->vap_mode == wifi_vap_mode_sta) {
@@ -2096,7 +2098,7 @@ INT wifi_hal_startScan(wifi_radio_index_t index, wifi_neighborScanMode_t scan_mo
     wifi_radio_operationParam_t *radio_param;
     char country[8] = {0}, tmp_str[32] = {0}, chan_list_str[512] = {0};
     unsigned int freq_list[32], i;
-    ssid_t  ssid_list[8];
+    ssid_t  ssid_list[8] = { 0 };
 
     wifi_hal_dbg_print("%s:%d: index: %d mode: %d dwell time: %d\n", __func__, __LINE__, index,
         scan_mode, dwell_time);
@@ -2161,7 +2163,9 @@ INT wifi_hal_startScan(wifi_radio_index_t index, wifi_neighborScanMode_t scan_mo
     }
 
     strcpy(ssid_list[0], vap->u.sta_info.ssid);
-    wifi_hal_info_print("%s:%d: Scan Frequencies:%s \n", __func__, __LINE__, chan_list_str);
+
+    wifi_hal_info_print("%s:%d: Scan Frequencies:%s, ssid_list:%s, vap->u.sta_info.ssid:%s\n",
+        __func__, __LINE__, chan_list_str, ssid_list[0], vap->u.sta_info.ssid);
 
     return (nl80211_start_scan(interface, 0, num, freq_list, dwell_time, 1, ssid_list) == 0) ? RETURN_OK:RETURN_ERR;
 }
@@ -4230,4 +4234,23 @@ int steering_set_acl_mode(uint32_t apIndex, uint32_t mac_filter_mode)
 
     vap->u.bss_info.mac_filter_mode = mac_filter_mode;
     return (nl80211_set_acl(interface));
+}
+
+int set_sta_wifi_security_cfg(uint32_t vap_index, wifi_vap_security_t *p_recv_security)
+{
+    wifi_interface_info_t *interface = get_interface_by_vap_index(vap_index);
+
+    if (interface == NULL) {
+        wifi_hal_error_print(":%s:%d interface not found for vap:%d\n", __func__, __LINE__, vap_index);
+        return RETURN_ERR;
+    } else {
+        wifi_vap_security_t *p_security = &interface->vap_info.u.sta_info.security;
+        printf(":%s:%d security key old:%s new:%s for vap:%d\n", __func__, __LINE__, p_security->u.key.key,
+            p_recv_security->u.key.key, vap_index);
+
+        strncpy(p_security->u.key.key, p_recv_security->u.key.key, strlen(p_recv_security->u.key.key) + 1);
+        printf(":%s:%d new security key set:%s\n", __func__, __LINE__, p_security->u.key.key);
+    }
+
+    return RETURN_OK;
 }
